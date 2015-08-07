@@ -3,7 +3,7 @@
 # vcf2maf - Convert a VCF into a MAF by mapping each variant to only one of all possible gene isoforms
 
 use strict;
-#use warnings;
+use warnings;
 use IO::File;
 use Getopt::Long qw( GetOptions );
 use Pod::Usage qw( pod2usage );
@@ -164,7 +164,7 @@ unless( @ARGV and $ARGV[0] =~ m/^-/ ) {
 # Parse options and print usage if there is a syntax error, or if usage was explicitly requested
 my ( $man, $help, $use_snpeff ) = ( 0, 0, 0 );
 my ( $input_vcf, $vep_anno, $snpeff_anno, $output_maf, $custom_enst_file,$input_vagrent );
-my ( $vcf_tumor_id, $vcf_normal_id );
+my ( $vcf_tumor_id, $vcf_normal_id ,$tumor_uuid, $normal_uuid );
 GetOptions(
     'help!' => \$help,
     'man!' => \$man,
@@ -178,6 +178,8 @@ GetOptions(
     'normal-id=s' => \$normal_id,
     'vcf-tumor-id=s' => \$vcf_tumor_id,
     'vcf-normal-id=s' => \$vcf_normal_id,
+    'tumor-uuid=s' => \$tumor_uuid,
+    'normal-uuid=s' => \$normal_uuid,
     'custom-enst=s' => \$custom_enst_file,
     'vep-path=s' => \$vep_path,
     'vep-data=s' => \$vep_data,
@@ -345,7 +347,6 @@ while( my $line = $vcf_fh->getline ) {
     # If there are multiple ALT alleles, we will choose the allele specified in the tumor GT field
     # If tumor GT undefined or ambiguous, we will choose the one with the most supporting read depth
     my @alleles = ( $ref, split( /,/, $alt ));
-    print @alleles;
     my $var_allele_idx = 1;
 
     # Parse out info from the tumor genotype field
@@ -354,7 +355,18 @@ while( my $line = $vcf_fh->getline ) {
         my @format_keys = split( /\:/, $format_line );
         my $idx = 0;
         %tum_info = map {( $format_keys[$idx++], $_ )} split( /\:/, $rest[$vcf_tumor_idx] );
-
+				
+				
+				if( defined $tum_info{PR}) {  
+            $tum_info{AD}=( ($tum_info{PR} + $tum_info{NR}) - ($tum_info{PN} + $tum_info{PP})).','.($tum_info{PN} + $tum_info{PP});
+            $tum_info{DP}=$tum_info{PR} + $tum_info{NR};
+        }
+				
+				if( defined $tum_info{FAZ}) {
+            $tum_info{AD}=$tum_info{'F'.$alleles[0].'Z'}.','.$tum_info{'F'.$alleles[1].'Z'}; 
+            $tum_info{DP}= $tum_info{'F'.$alleles[0].'Z'}+$tum_info{'F'.$alleles[1].'Z'}       
+        }
+				
         # If possible, parse the tumor genotype to identify the variant allele
         if( defined $tum_info{GT} and $tum_info{GT} ne "." and $tum_info{GT} ne "./." ) {
             my @genotype = split( /[\/|]/, $tum_info{GT} );
@@ -421,19 +433,23 @@ while( my $line = $vcf_fh->getline ) {
             $tum_depths[$var_allele_idx] = $tum_info{DV};
         }
         # Handle CGP SNV depth sb43
-         elsif( defined $tum_info{FAZ}) {
+        # elsif( defined $tum_info{FAZ}) {
             # Reference allele depth and depths for any other ALT alleles must be left undefined
-            @tum_depths = map{""} @alleles;
-            $tum_depths[$var_allele_idx] = ($tum_info{FAZ} + $tum_info{FCZ} + $tum_info{FGZ} + $tum_info{FTZ} + $tum_info{RAZ} + $tum_info{RCZ} + $tum_info{RGZ} + $tum_info{RTZ});
-        }
-        # Handle CGP INDEL depth sb43
-         elsif( defined $tum_info{PR}) {
-            # Reference allele depth and depths for any other ALT alleles must be left undefined
-            @tum_depths = map{""} @alleles;
-            $tum_depths[0]= ($tum_info{PR} + $tum_info{NR}) - ($tum_info{PN} + $tum_info{PP});
-            $tum_depths[$var_allele_idx] = $tum_info{PN} + $tum_info{PP};
+        #    @tum_depths = map{""} @alleles;
+        #    $tum_depths[$var_allele_idx] = ($tum_info{FAZ} + $tum_info{FCZ} + $tum_info{FGZ} + $tum_info{FTZ} + $tum_info{RAZ} + $tum_info{RCZ} + $tum_info{RGZ} + $tum_info{RTZ});
             
-        }
+        #    my $ref_tag='F'.$alleles[0].'Z';
+        #    my $alt_tag='F'.$alleles[1].'Z';
+        #    $tum_info{AD}=$tum_info{$ref_tag}.','.$tum_info{$alt_tag};          
+        #}
+        # Handle CGP INDEL depth sb43
+        # elsif( defined $tum_info{PR}) {
+            # Reference allele depth and depths for any other ALT alleles must be left undefined
+        #    @tum_depths = map{""} @alleles;
+        #    $tum_depths[0]= ($tum_info{PR} + $tum_info{NR}) - ($tum_info{PN} + $tum_info{PP});
+        #    $tum_depths[$var_allele_idx] = $tum_info{PN} + $tum_info{PP};
+        #    $tum_info{AD}=( ($tum_info{PR} + $tum_info{NR}) - ($tum_info{PN} + $tum_info{PP})).','.($tum_info{PN} + $tum_info{PP});
+        #}
         # For all other lines where #depths is not equal to #alleles, blank out the depths
         elsif( @tum_depths and $#tum_depths != $#alleles ) {
             warn "WARNING: Unusual AD format for alleles $ref,$alt in $format_line = " . $rest[$vcf_tumor_idx] . "\n";
@@ -483,6 +499,19 @@ while( my $line = $vcf_fh->getline ) {
         my @format_keys = split( /\:/, $format_line );
         my $idx = 0;
         %nrm_info = map {( $format_keys[$idx++], $_ )} split( /\:/, $rest[$vcf_normal_idx] );
+
+
+
+			if( defined $nrm_info{PR}) {  
+            $nrm_info{AD}=( ($nrm_info{PR} + $nrm_info{NR}) - ($nrm_info{PN} + $nrm_info{PP})).','.($nrm_info{PN} + $nrm_info{PP});
+            $nrm_info{DP}=$nrm_info{PR} + $nrm_info{NR};
+        }
+				
+				if( defined $nrm_info{FAZ}) {
+            $nrm_info{AD}=$nrm_info{'F'.$alleles[0].'Z'}.','.$nrm_info{'F'.$alleles[1].'Z'}; 
+            $nrm_info{DP}= $nrm_info{'F'.$alleles[0].'Z'}+$nrm_info{'F'.$alleles[1].'Z'}       
+        }
+        
 
         # If AD is defined, then parse out all REF/ALT allele depths, or whatever is in it
         if( defined $nrm_info{AD} and $nrm_info{AD} ne "." ) {
@@ -543,18 +572,18 @@ while( my $line = $vcf_fh->getline ) {
         }
         
         # Handle CGP SNV depth sb43
-         elsif( defined $nrm_info{FAZ}) {
+        # elsif( defined $nrm_info{FAZ}) {
             # Reference allele depth and depths for any other ALT alleles must be left undefined
-            @nrm_depths = map{""} @alleles;
-            $nrm_depths[$var_allele_idx] = ($nrm_info{FAZ} + $nrm_info{FCZ} + $nrm_info{FGZ} + $nrm_info{FTZ} + $nrm_info{RAZ} + $nrm_info{RCZ} + $nrm_info{RGZ} + $nrm_info{RTZ});
-        }
+        #    @nrm_depths = map{""} @alleles;
+        #    $nrm_depths[$var_allele_idx] = ($nrm_info{FAZ} + $nrm_info{FCZ} + $nrm_info{FGZ} + $nrm_info{FTZ} + $nrm_info{RAZ} + $nrm_info{RCZ} + $nrm_info{RGZ} + $nrm_info{RTZ});
+        #}
         # Handle CGP INDEL depth sb43
-         elsif( defined $nrm_info{PR}) {
+         #elsif( defined $nrm_info{PR}) {
             # Reference allele depth and depths for any other ALT alleles must be left undefined
-            @nrm_depths = map{""} @alleles;
-            $nrm_depths[0]= ($nrm_info{PR} + $nrm_info{NR}) - ($nrm_info{PN} + $nrm_info{PP})  ;
-            $nrm_depths[$var_allele_idx] = $nrm_info{PN} + $nrm_info{PP};
-        }
+         #   @nrm_depths = map{""} @alleles;
+         #   $nrm_depths[0]= ($nrm_info{PR} + $nrm_info{NR}) - ($nrm_info{PN} + $nrm_info{PP})  ;
+         #   $nrm_depths[$var_allele_idx] = $nrm_info{PN} + $nrm_info{PP};
+        #}
         
         # For all other lines where #depths is not equal to #alleles, blank out the depths
         elsif( @nrm_depths and $#nrm_depths != $#alleles ) {
@@ -784,34 +813,33 @@ while( my $line = $vcf_fh->getline ) {
 
 # Added vagrent specific code .....		
     elsif( $info{VT} ) {
-    	my %effect=undef;
+    	my %effect;
     	foreach my $key (%info) {  	
-    		if($key eq 'VW') {
+    		if($key eq 'VD') {
     			my($Hugo_Symbol,$transcript_id,$Codon_Change,$Amino_Acid_Change,$tmp_effect)=(split /\|/, $info{$key})[0,1,3,4,5];
-    			
-    			my ($transcript_biotype,$eff)=(split ':',$tmp_effect)[0,5];
-    			
-    			#($CDS_position)=~s/c\.(\d+)\D.*/$1/;
+    		 	my @ann_tmp	=(split ':',$tmp_effect);
+    		 	#($CDS_position)=~s/c\.(\d+)\D.*/$1/;
     			#$Protein_position=~s/p\.\D(\d+)\D.*/$1/;
     			#print "$info{$key}:\n $transcript_id--- $Hugo_Symbol-----* $Codon_Change *--- * $Amino_Acid_Change * $var_allele_idx --$eff -- $transcript_biotype\n";
     			if($Hugo_Symbol !~ m/ENSG\d{10,}/) {
     				$effect{Hugo_Symbol}=$Hugo_Symbol;
     			}
-    			$effect{Effect}=$eff;
+    			$effect{Effect}=pop @ann_tmp;
     			$effect{Consequence} = $info{'VC'};
     			$effect{Codon_Change}=$Codon_Change;
     			$effect{Amino_Acid_Change}=$Amino_Acid_Change;
     			$effect{Transcript_ID}=$transcript_id;
-    			$effect{Transcript_BioType}=$transcript_biotype;
+    			$effect{Transcript_BioType}=shift @ann_tmp;
     			$effect{Gene_Name}=$Hugo_Symbol;
     			
     		}	
 
     	}
-    	
+    	 
+    	  	
     	push( @all_effects, \%effect );
-    	
-    	($maf_effect)= sort @all_effects;
+    	$maf_effect= $all_effects[0] ;
+    
     }
    
 
@@ -827,6 +855,7 @@ while( my $line = $vcf_fh->getline ) {
     $maf_line{End_Position} = $stop;
     $maf_line{Strand} = '+'; # Per MAF definition, only the positive strand is an accepted value
     my $so_effect = ( $maf_effect->{Effect} ? $maf_effect->{Effect} : $maf_effect->{Consequence} );
+   # print "------". $so_effect.GetVariantClassification( $so_effect, $var_type)."----\n";
     $maf_line{Variant_Classification} = GetVariantClassification( $so_effect, $var_type);
     $maf_line{Variant_Type} = $var_type;
     $maf_line{Reference_Allele} = $ref;
@@ -854,6 +883,10 @@ while( my $line = $vcf_fh->getline ) {
     }
     $maf_line{Tumor_Sample_Barcode} = $tumor_id;
     $maf_line{Matched_Norm_Sample_Barcode} = $normal_id;
+    
+    $maf_line{Tumor_Sample_UUID} = $tumor_uuid if( defined $tumor_uuid );
+    $maf_line{Matched_Norm_Sample_UUID} = $normal_uuid  if( defined $normal_uuid);
+    
     $maf_line{t_depth} = $tum_info{DP} if( defined $tum_info{DP} and $tum_info{DP} ne "." );
     ( $maf_line{t_ref_count}, $maf_line{t_alt_count} ) = @tum_depths[0,$var_allele_idx] if( @tum_depths );
     $maf_line{n_depth} = $nrm_info{DP} if( defined $nrm_info{DP} and $nrm_info{DP} ne "." );
@@ -867,6 +900,9 @@ while( my $line = $vcf_fh->getline ) {
         my $protein_change = ( $effect->{HGVSp} ? $effect->{HGVSp} : '' );
         my $transcript_id = ( $effect->{Transcript_ID} ? $effect->{Transcript_ID} : '' );
         my $refseq_ids = ( $effect->{RefSeq} ? $effect->{RefSeq} : '' );
+        
+        #print $maf_line{all_effects}."$effect->{Effect} \n $transcript_id\n";
+        
         $maf_line{all_effects} .= "$gene_name,$effect_type,$protein_change,$transcript_id,$refseq_ids;" if( $gene_name and $effect_type and $transcript_id );
     }
 
@@ -880,18 +916,19 @@ $vcf_fh->close;
 # Converts Sequence Ontology variant types to MAF variant classifications
 sub GetVariantClassification {
     my ( $effect, $var_type ) = @_;
+    return "Targeted_Region" if (!defined $effect);
     return "Splice_Site" if( $effect =~ /^(splice_acceptor_variant|splice_donor_variant|transcript_ablation)$/ );
     return "Nonsense_Mutation" if( $effect eq 'stop_gained' );
     return "Frame_Shift_Del" if ( $effect eq 'frameshift_variant' and $var_type eq 'DEL' );
     return "Frame_Shift_Ins" if( $effect eq 'frameshift_variant' and $var_type eq 'INS' );
     return "Nonstop_Mutation" if( $effect eq 'stop_lost' );
-    return "Translation_Start_Site" if( $effect =~ /^(initiator_codon_variant|start_lost)$/ );
-    return "In_Frame_Ins" if( $effect eq 'inframe_insertion' );
-    return "In_Frame_Del" if( $effect eq 'inframe_deletion' );
-    return "Missense_Mutation" if( $effect =~ /^(missense_variant|coding_sequence_variant|conservative_missense_variant|rare_amino_acid_variant)$/ );
+    return "Translation_Start_Site" if( $effect =~ /^(initiator_codon_variant|start_lost|initiator_codon_change)$/ );
+    return "In_Frame_Ins" if( $effect =~ /^(inframe_insertion)$/ );
+    return "In_Frame_Del" if( $effect =~ /^(inframe_deletion)$/ );
+    return "Missense_Mutation" if( $effect =~ /^(missense_variant|coding_sequence_variant|conservative_missense_variant|rare_amino_acid_variant|non_synonymous_codon)$/ );
     return "Intron" if ( $effect =~ /^(transcript_amplification|splice_region_variant|intron_variant|INTRAGENIC|intragenic_variant|intron|intron_variant|extended_intronic_splice_region|extended_cis_splice_site)$/ );
-    return "Silent" if( $effect =~ /^(incomplete_terminal_codon_variant|synonymous_variant|stop_retained_variant|NMD_transcript_variant)$/ );
-    return "RNA" if( $effect =~ /^(mature_miRNA_variant|non_coding_exon_variant|non_coding_transcript_exon_variant|non_coding_transcript_variant|nc_transcript_variant)$/ );
+    return "Silent" if( $effect =~ /^(incomplete_terminal_codon_variant|synonymous_variant|stop_retained_variant|NMD_transcript_variant|synonymous_codon)$/ );
+    return "RNA" if( $effect =~ /^(mature_miRNA_variant|non_coding_exon_variant|non_coding_transcript_exon_variant|non_coding_transcript_variant|nc_transcript_variant|transcript_variant)$/ );
     return "5'UTR" if( $effect =~ /^(5_prime_UTR_variant|5_prime_UTR_premature_start_codon_gain_variant)$/ );
     return "3'UTR" if( $effect =~ /^(3_prime_UTR_variant)$/ );
     return "IGR" if( $effect =~ /^(TF_binding_site_variant|regulatory_region_variant|regulatory_region|intergenic_variant|intergenic_region)$/ );
@@ -926,6 +963,8 @@ __DATA__
  --normal-id      Matched_Norm_Sample_Barcode to report in the MAF [NORMAL]
  --vcf-tumor-id   Tumor sample ID used in VCF's genotype columns [--tumor-id]
  --vcf-normal-id  Matched normal ID used in VCF's genotype columns [--normal-id]
+ --tumor-uuid   Tumor sample UUID used in VCF's genotype columns [--tumor-uuid]
+ --normal-uuid  Matched normal UUID used in VCF's genotype columns [--normal-uuid]
  --custom-enst    List of custom ENST IDs that override canonical selection
  --use-snpeff     Use snpEff to annotate VCF, instead of the default VEP
  --vep-path       Folder containing variant_effect_predictor.pl [~/vep]
