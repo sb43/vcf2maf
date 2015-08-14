@@ -9,6 +9,8 @@ use Getopt::Long qw( GetOptions );
 use Pod::Usage qw( pod2usage );
 use Config;
 use Data::Dumper;
+use Vcf;
+
 
 # Set any default paths and constants
 my ( $tumor_id, $normal_id ) = ( "TUMOR", "NORMAL" );
@@ -164,7 +166,7 @@ unless( @ARGV and $ARGV[0] =~ m/^-/ ) {
 # Parse options and print usage if there is a syntax error, or if usage was explicitly requested
 my ( $man, $help, $use_snpeff ) = ( 0, 0, 0 );
 my ( $input_vcf, $vep_anno, $snpeff_anno, $output_maf, $custom_enst_file,$input_vagrent );
-my ( $vcf_tumor_id, $vcf_normal_id ,$tumor_uuid, $normal_uuid );
+my ( $vcf_tumor_id, $vcf_normal_id ,$tumor_uuid, $normal_uuid,$sequence_source,$process_flag,$dbsnp,$somatic_maf );
 GetOptions(
     'help!' => \$help,
     'man!' => \$man,
@@ -181,6 +183,7 @@ GetOptions(
     'tumor-uuid=s' => \$tumor_uuid,
     'normal-uuid=s' => \$normal_uuid,
     'custom-enst=s' => \$custom_enst_file,
+    'seq-source=s' => \$sequence_source,
     'vep-path=s' => \$vep_path,
     'vep-data=s' => \$vep_data,
     'vep-forks=s' => \$vep_forks,
@@ -190,10 +193,22 @@ GetOptions(
     'snpeff-db=s' => \$snpeff_db,
     'ncbi-build=s' => \$ncbi_build,
     'maf-center=s' => \$maf_center,
-    'min-hom-vaf=s' => \$min_hom_vaf
+    'min-hom-vaf=s' => \$min_hom_vaf,
+    'process-flag=s' => \$process_flag,
+    'somatic-maf=s' => \$somatic_maf,
+    'dbsnp=s' => \$dbsnp
 ) or pod2usage( -verbose => 1, -input => \*DATA, -exitval => 2 );
 pod2usage( -verbose => 1, -input => \*DATA, -exitval => 0 ) if( $help );
 pod2usage( -verbose => 2, -input => \*DATA, -exitval => 0 ) if( $man );
+
+my $ccc=0;
+
+my $vcf=undef;
+if(defined $dbsnp) {
+      $vcf = Vcf->new(file => $dbsnp);
+			$vcf->parse_header();	
+			$vcf->recalc_ac_an(0);
+}
 
 # Check for valid input combinations
 if(( $input_vcf and $vep_anno ) or ( $input_vcf and $snpeff_anno ) or ( $vep_anno and $snpeff_anno )) {
@@ -203,9 +218,11 @@ elsif( $use_snpeff and ( $vep_anno or $snpeff_anno )) {
     die "ERROR: The use-snpeff option can only be used with input-vcf\n";
 }
 
+
 # Unless specified, assume that the VCF uses the same sample IDs that the MAF will contain
 $vcf_tumor_id = $tumor_id unless( $vcf_tumor_id );
 $vcf_normal_id = $normal_id unless( $vcf_normal_id );
+
 
 # Load up the custom isoform overrides if provided:
 my %custom_enst;
@@ -280,6 +297,8 @@ else {
     die "ERROR: Please specify an input file: input-vcf, input-vep, or input-snpeff. STDIN is not supported.\n";
 }
 
+
+
 # Define default MAF Header (https://wiki.nci.nih.gov/x/eJaPAQ) with our vcf2maf additions
 my @maf_header = qw(
     Hugo_Symbol Entrez_Gene_Id Center NCBI_Build Chromosome Start_Position End_Position Strand
@@ -316,7 +335,6 @@ my $vcf_file = ( $vep_anno ? $vep_anno : $input_vagrent ? $input_vagrent : $snpe
 my $vcf_fh = IO::File->new( $vcf_file ) or die "ERROR: Couldn't open annotated VCF: $vcf_file!\n";
 my ( $vcf_tumor_idx, $vcf_normal_idx );
 while( my $line = $vcf_fh->getline ) {
-
     # Parse out the VEP CSQ format, which seems to differ between runs
     if( $line =~ m/^##INFO=<ID=CSQ.*Format: (\S+)">$/ ) {
         @vepcsq_cols_format = split( /\|/, $1 );
@@ -326,7 +344,7 @@ while( my $line = $vcf_fh->getline ) {
 
     chomp( $line );
     my ( $chrom, $pos, $ids, $ref, $alt, $qual, $filter, $info_line, $format_line, @rest ) = split( /\t/, $line );
-		
+	
     # If FORMATted genotype fields are available, find the sample with the variant, and matched normal
     if( $line =~ m/^#CHROM/ ) {
         if( $format_line and scalar( @rest ) > 0 ) {
@@ -339,7 +357,11 @@ while( my $line = $vcf_fh->getline ) {
         }
         next;
     }
+		
+		next if (defined $process_flag  && $process_flag ne $filter);
 
+	
+		
     # Parse out the data in the info column, and store into a hash
     my %info = map {( m/=/ ? ( split( /=/, $_, 2 )) : ( $_, 1 ))} split( /\;/, $info_line );
 		
@@ -356,15 +378,17 @@ while( my $line = $vcf_fh->getline ) {
         my $idx = 0;
         %tum_info = map {( $format_keys[$idx++], $_ )} split( /\:/, $rest[$vcf_tumor_idx] );
 				
-				
-				if( defined $tum_info{PR}) {  
+				# INDEL 
+				if( defined $tum_info{PR}) {
             $tum_info{AD}=( ($tum_info{PR} + $tum_info{NR}) - ($tum_info{PN} + $tum_info{PP})).','.($tum_info{PN} + $tum_info{PP});
             $tum_info{DP}=$tum_info{PR} + $tum_info{NR};
         }
-				
+				# SNP
 				if( defined $tum_info{FAZ}) {
-            $tum_info{AD}=$tum_info{'F'.$alleles[0].'Z'}.','.$tum_info{'F'.$alleles[1].'Z'}; 
-            $tum_info{DP}= $tum_info{'F'.$alleles[0].'Z'}+$tum_info{'F'.$alleles[1].'Z'}       
+						#GT:FAZ:FCZ:FGZ:FTZ:RAZ:RCZ:RGZ:RTZ:PM   0|0:0:7:0:2:0:76:0:0:2.4e-02    0|1:0:17:0:8:0:111:0:0:5.9e-
+						
+            $tum_info{AD}=($tum_info{'F'.$alleles[0].'Z'}+ $tum_info{'R'.$alleles[0].'Z'}) .','.($tum_info{'F'.$alleles[1].'Z'}+$tum_info{'R'.$alleles[1].'Z'}); 
+            $tum_info{DP}= $tum_info{'F'.$alleles[0].'Z'}+$tum_info{'F'.$alleles[1].'Z'}+ $tum_info{'R'.$alleles[0].'Z'}+$tum_info{'R'.$alleles[1].'Z'}      
         }
 				
         # If possible, parse the tumor genotype to identify the variant allele
@@ -634,8 +658,9 @@ while( my $line = $vcf_fh->getline ) {
 
     my @all_effects; # A list of effects of this variant on all possible transcripts
     my $maf_effect; # A single effect per variant to report in the standard MAF columns
-    my %maf_line = map{( $_, '' )} @maf_header; # Initialize MAF fields with blank strings
-
+    my %maf_line = map{( $_, undef )} @maf_header; # Initialize MAF fields with blank strings
+    # add RS id 
+     
     ### Parsing VEP consequences
     # INFO:CSQ is a comma-delim list of VEP consequences, with pipe-delim details per consequence
     # VEP replaces ',' in details with '&'. We'll assume that all '&'s we see, were formerly commas
@@ -854,6 +879,15 @@ while( my $line = $vcf_fh->getline ) {
     $maf_line{Start_Position} = $start;
     $maf_line{End_Position} = $stop;
     $maf_line{Strand} = '+'; # Per MAF definition, only the positive strand is an accepted value
+     # we don't have this information
+    $maf_line{Verification_Status}='Unknown';
+    $maf_line{Validation_Status}='Untested';
+    $maf_line{Mutation_Status} = 'Unknown';
+    $maf_line{Mutation_Status} = 'Somatic' if($filter eq 'PASS');  # set mutation status as Somatic if FILTER is PASS
+    $maf_line{Sequence_Source} = $sequence_source;
+    $maf_line{Sequencer}='Illumina GAIIx' unless ($maf_line{Sequencer});
+    
+    $maf_line{Validation_Method}='NO' unless ($maf_line{Validation_Method});
     my $so_effect = ( $maf_effect->{Effect} ? $maf_effect->{Effect} : $maf_effect->{Consequence} );
    # print "------". $so_effect.GetVariantClassification( $so_effect, $var_type)."----\n";
     $maf_line{Variant_Classification} = GetVariantClassification( $so_effect, $var_type);
@@ -898,17 +932,57 @@ while( my $line = $vcf_fh->getline ) {
         my $gene_name = $effect->{Hugo_Symbol};
         my $effect_type = ( $effect->{Effect} ? $effect->{Effect} : $effect->{Consequence} );
         my $protein_change = ( $effect->{HGVSp} ? $effect->{HGVSp} : '' );
-        my $transcript_id = ( $effect->{Transcript_ID} ? $effect->{Transcript_ID} : '' );
-        my $refseq_ids = ( $effect->{RefSeq} ? $effect->{RefSeq} : '' );
+        my $transcript_id = ( $effect->{Transcript_ID} ? $effect->{Transcript_ID} : '-' );
+        my $refseq_ids = ( $effect->{RefSeq} ? $effect->{RefSeq} : '-' );
         
-        #print $maf_line{all_effects}."$effect->{Effect} \n $transcript_id\n";
-        
+             
         $maf_line{all_effects} .= "$gene_name,$effect_type,$protein_change,$transcript_id,$refseq_ids;" if( $gene_name and $effect_type and $transcript_id );
     }
 
     # At this point, we've generated all we can about this variant, so write it to the MAF
-   
-    $maf_fh->print( join( "\t", map{ $maf_line{$_} } @maf_header ) . "\n" );
+   	
+  	my $rs_id='novel';
+  	my $somatic_annot='Unknown';
+    if(defined $vcf && !(defined $somatic_maf)) {
+      $vcf->open(region=>"$chrom:$pos-$pos");
+			while (my $x=$vcf->next_data_array()) { 
+				if (($$x[0] eq $chrom) && ($$x[1] eq $pos ) && ($$x[4] eq $alt)){
+					$rs_id=$$x[2];
+				}
+			}
+    }   
+		
+		$ccc++;
+		if($ccc % 100 == 0) {
+			print "completed $ccc lines\n";
+		}
+
+    if( (defined $somatic_maf) and ( ($maf_line{Variant_Classification} eq "Frame_Shift_Del") || ($maf_line{Variant_Classification} eq "Frame_Shift_Ins") || 
+    	($maf_line{Variant_Classification} eq "Targeted_Region") || ($maf_line{Variant_Classification} eq "In_Frame_Ins") || ($maf_line{Variant_Classification} eq "In_Frame_Del") ||
+    	($maf_line{Variant_Classification} eq "Missense_Mutation") || ($maf_line{Variant_Classification} eq "Nonsense_Mutation") || ($maf_line{Variant_Classification} eq "Silent" ) ||
+    	($maf_line{Variant_Classification} eq "Splice_Site")|| ($maf_line{Variant_Classification} eq "Translation_Start_Site") || ($maf_line{Variant_Classification} eq "Nonstop_Mutation") || 
+    	($maf_line{Variant_Classification} eq "RNA")) ) {
+      if(defined $vcf) {
+      	$vcf->open(region=>"$chrom:$pos-$pos");
+				while (my $x=$vcf->next_data_array()) { 
+					if (($$x[0] eq $chrom) && ($$x[1] eq $pos ) && ($$x[4] eq $alt)){
+						#$somatic_annot=$$x[7];
+						$rs_id=$$x[2];
+						
+					}
+				}
+    	}   
+				
+				#next if (defined($somatic_annot) && $somatic_annot!~/SAO\=2/);	
+    		$maf_line{dbSNP_RS}=$rs_id;
+    		$maf_fh->print( join( "\t", map{ defined $maf_line{$_} ? $maf_line{$_} : '-' } @maf_header ) . "\n" );
+    	
+    }elsif(defined $somatic_maf ) {
+    	next;
+    }else {  
+    	$maf_line{dbSNP_RS}=$rs_id;    	
+    	$maf_fh->print( join( "\t", map{ defined $maf_line{$_} ? $maf_line{$_} : '-' } @maf_header ) . "\n" );
+    }
 }
 $maf_fh->close if( $output_maf );
 $vcf_fh->close;
@@ -963,8 +1037,9 @@ __DATA__
  --normal-id      Matched_Norm_Sample_Barcode to report in the MAF [NORMAL]
  --vcf-tumor-id   Tumor sample ID used in VCF's genotype columns [--tumor-id]
  --vcf-normal-id  Matched normal ID used in VCF's genotype columns [--normal-id]
- --tumor-uuid   Tumor sample UUID used in VCF's genotype columns [--tumor-uuid]
- --normal-uuid  Matched normal UUID used in VCF's genotype columns [--normal-uuid]
+ --tumor-uuid     Tumor sample UUID used in VCF's genotype columns [--tumor-uuid]
+ --normal-uuid    Matched normal UUID used in VCF's genotype columns [--normal-uuid]
+ --seq-source     Molecular assay type used to produce the analytes used for sequencing
  --custom-enst    List of custom ENST IDs that override canonical selection
  --use-snpeff     Use snpEff to annotate VCF, instead of the default VEP
  --vep-path       Folder containing variant_effect_predictor.pl [~/vep]
@@ -977,6 +1052,8 @@ __DATA__
  --ncbi-build     NCBI reference assembly ID to report in MAF [GRCh37]
  --maf-center     Variant calling center to report in MAF [.]
  --min-hom-vaf    If GT undefined in VCF, minimum allele fraction to call a variant homozygous [0.7]
+ --process-flag   process variants with this flag [ all ]
+ --dbsnp          dbsnp vcf build
  --help           Print a brief help message and quit
  --man            Print the detailed manual
 
