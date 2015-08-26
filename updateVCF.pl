@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 
-# vcf2maf - Convert a VCF into a MAF by mapping each variant to only one of all possible gene isoforms
+# updted VCF headers - Convert a VCF into a MAF by mapping each variant to only one of all possible gene isoforms
 
 use strict;
 use Data::Dumper;
@@ -31,7 +31,6 @@ if (! -e $outdir) {
 	mkpath($outdir);
 }
 
-my $type='somatic';
 
 open(my $cgp_fh, '<', 'project_data/all_samples_sent.txt') or die "Could not open ref file\n";
 
@@ -56,54 +55,102 @@ my $sample_names=undef;
 			}
 	}
 	close $cghub_fh;
-	my $ext="caveman_protected";
 	my $i=0;
 	foreach my $sample (keys %$sample_names) {
-		my $cmd=undef;
 		if( ref($sample_names->{$sample}) eq 'ARRAY' ) {
-		
 			my $input_vcf=$file_path.$sample.$file_extension;
-			#my($dir,$file,$ext)=File::parse();
 			if( -s $input_vcf.'.gz' ) {
-					my $vcf = Vcf->new(file => $input_vcf.'.gz');
-					$vcf->parse_header();	
-					$vcf->recalc_ac_an(0);
-					my($normal_id)=get_normal_id($vcf);
+					my $vcf_old = Vcf->new(file => $input_vcf.'.gz');
+					$vcf_old->parse_header();	
+					$vcf_old->recalc_ac_an(0);
+					my($normal_id)=get_normal_id($vcf_old);
+					$vcf_old->close();
 					#print "$sample---$normal_id------$sample_names->{$sample}[0]-----$sample_names->{$sample}[1]------$sample_names->{$normal_id}[0]-----$sample_names->{$normal_id}[1]\n";
-					#$cmd = "bgzip -f -c -d $input_vcf.gz >$input_vcf";
+					#my $cmd = "bgzip -f -c -d $input_vcf.gz >$input_vcf";
 					#run_cmd($cmd);
-					$input_vcf=~s/\.gz//g;
-					#my $sample_set=$sample;
-					#$sample_set=~s/(.*)\w{1}/$1/g;
-
-					#my $vcf_file_tmp="/lustre/scratch112/sanger/cgppipe/nst_pipe/data/export/request_225/results/$sample_set/tumour/pindel/$sample_names->{$sample}[1]/$sample_names->{$sample}[1]\_vs_$sample_names->{$normal_id}[1].flagged.annot.vcf.gz";
+					my $sample_set=$sample;
+	#*****				
+					my $var_type='Indel'; # Sub/Indel
+					
+					my $tcga_vcf_file="$outdir/$sample_names->{$sample}[1]\_vs_$sample_names->{$normal_id}[1].flagged.$var_type.annot.vcf";
+					
+					
+				 #my $cmd="bgzip $tcga_vcf_file";
+				 #run_cmd($cmd);
+				 #$cmd="tabix -p vcf $tcga_vcf_file.gz";
+				 #run_cmd($cmd);
+				 
+					#next;
+					
+					open (my $tcga_vcf_file_fh, '>', $tcga_vcf_file) or warn "Unable to open file $!";
+					
+					$sample_set=~s/(.*)\w{1}/$1/g;
+	#*****
+					#caveman
+					#my $vcf_file_tmp="/lustre/scratch112/sanger/cgppipe/nst_pipe/data/export/request_225/results/$sample_set/tumour/caveman/$sample_names->{$sample}[1]/$sample_names->{$sample}[1]\_vs_$sample_names->{$normal_id}[1].flagged.muts.annot.vcf.gz";
+					#pindel
+					my $vcf_file_tmp="/lustre/scratch112/sanger/cgppipe/nst_pipe/data/export/request_225/results/$sample_set/tumour/pindel/$sample_names->{$sample}[1]/$sample_names->{$sample}[1]\_vs_$sample_names->{$normal_id}[1].flagged.annot.vcf.gz";
+					#CaVEMan, Pindel
+	#*****
+					my $software_name='<pindel>';
+					#caveman :1.7.0;  pindel: 1.5.2 ,
+	#*****
+					my $software_version='<1.5.2>';
+					
+					my $vcf = Vcf->new(file => $vcf_file_tmp);					
+					my $header=$vcf->parse_header();
 										
-					#$cmd = "bgzip -f -c -d $vcf_file_tmp > $input_vcf";
-					#run_cmd($cmd);
-									
-					#$vcf_file_tmp=~s/\.gz//g;
+					#print Dumper $vcf->get_header_line(key=>'vcfProcessLog_20150815.1');
+					# pindel version 1.5.2 , caveman 1.7.0
+					$vcf->add_header_line({key =>'tcgaversion', value=>'1.2'});
+					$vcf->remove_header_line(key=>'reference');
+					$vcf->add_header_line({	key => 'reference' , value => 'ftp://ftp.sanger.ac.uk/pub/cancer/support-files/reference/GRCh37d5.fa'});
+					
+					$vcf->add_header_line({	key=>'SAMPLE', ID=>'NORMAL',
+						SampleTCGABarcode => $sample_names->{$normal_id}[1],
+						SampleUUID 				=> lc($sample_names->{$normal_id}[0]),
+						Description 			=> 'NORMAL',
+						softwareName 			=> $software_name,
+						softwareVer 			=> $software_version,
+						Platform					=> "Illumina",
+						SequenceSource    =>  "WXS",
+						Source        		=> 'CGHub',
+						SampleName        => $sample_names->{$normal_id}[1],
+						File							=> $sample_names->{$normal_id}[1].'.bam',
+					});
+					
+					
+					$vcf->add_header_line({	key=>'SAMPLE', ID=>'TUMOUR',
+						SampleTCGABarcode => $sample_names->{$sample}[1],
+						SampleUUID 				=> lc($sample_names->{$sample}[0]),
+						Description 			=> 'TUMOUR',
+						softwareName 			=> $software_name,
+						softwareVer 			=>  $software_version,
+						Platform					=> "Illumina",
+						SequenceSource    =>  "WXS",
+						Source        		=> 'CGHub',
+						SampleName        => $sample_names->{$sample}[1],
+						File							=> $sample_names->{$sample}[1].'.bam'		
+					});
+					
+				  print $tcga_vcf_file_fh $vcf->format_header();
+					while (my $x=$vcf->next_line()) { 
+								my ($ref,$alt)=(split /\t/ ,$x)[3,4];
+								next if ($ref =~ m/N/ || $alt =~ m/N/);
+								print $tcga_vcf_file_fh $x;
+        		
+    			}
 
-					$cmd = "perl vcf2maf.pl --input-vagrent $input_vcf ".
-								" --tumor-id $sample_names->{$sample}[1] --normal-id $sample_names->{$normal_id}[1] ".
-								" --vcf-tumor-id TUMOUR --vcf-normal-id NORMAL ".
-								" --tumor-uuid $sample_names->{$sample}[0]  --normal-uuid $sample_names->{$normal_id}[0] ".
-								" --maf-center sanger.ac.uk --seq-source WXS ".
-								" --output-maf $outdir/$sample\_$ext.maf ".
-								" --dbsnp /nfs/users/nfs_s/sb43/scripts/vcf2maf/project_data/dbsnp_subset/0000.vcf.gz ";
-								#" --process-flag PASS ".
-								#" --somatic-maf 1 "; 
-				   
-				       $i++;
-					     #run_cmd($cmd);
-				  		print "$cmd\n";
-				#print "$sample\n";
 			}		
 		}
 	}
 
+
+
+
 #"bsub -oo logs/caveaman_pass%I.log  -q normal -J 'caveman_pass[1-83]' -P analysis-cgp -n 1 -R'select[mem>=500] span[hosts=1] rusage[mem=500]' -M 500  'perl farm_idx_exec.pl caveman_pass.cmd $LSB_JOBINDEX'"
 
-print "bsub -oo logs/test%I.log  -q normal -J \'UNM[1-$i]\' -P analysis-cgp -n 1 -R\'select[cgp_nfs>=13] span[hosts=1] rusage[cgp_nfs=13]\' -M 500  \'perl farm_idx_exec.pl UNM.cmd \$LSB_JOBINDEX\'";
+#print "bsub -oo logs/test%I.log  -q normal -J \'UNM[1-$i]\' -P analysis-cgp -n 1 -R\'select[cgp_nfs>=13] span[hosts=1] rusage[cgp_nfs=13]\' -M 500  \'perl farm_idx_exec.pl UNM.cmd \$LSB_JOBINDEX\'";
 	
 	#print "completed analysis -- time to merge";
 	#awk '($1!~/Hugo_Symbol/ && $1!~/#version/)' *.maf >../pindel.maf

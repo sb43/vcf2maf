@@ -344,7 +344,7 @@ while( my $line = $vcf_fh->getline ) {
 
     chomp( $line );
     my ( $chrom, $pos, $ids, $ref, $alt, $qual, $filter, $info_line, $format_line, @rest ) = split( /\t/, $line );
-	
+		next if($ref =~ m/N/ || $alt =~ m/N/ );
     # If FORMATted genotype fields are available, find the sample with the variant, and matched normal
     if( $line =~ m/^#CHROM/ ) {
         if( $format_line and scalar( @rest ) > 0 ) {
@@ -358,9 +358,7 @@ while( my $line = $vcf_fh->getline ) {
         next;
     }
 		
-		next if (defined $process_flag  && $process_flag ne $filter);
-
-	
+		next if((defined $process_flag)  and ($process_flag ne $filter));
 		
     # Parse out the data in the info column, and store into a hash
     my %info = map {( m/=/ ? ( split( /=/, $_, 2 )) : ( $_, 1 ))} split( /\;/, $info_line );
@@ -887,7 +885,7 @@ while( my $line = $vcf_fh->getline ) {
     $maf_line{Sequence_Source} = $sequence_source;
     $maf_line{Sequencer}='Illumina GAIIx' unless ($maf_line{Sequencer});
     
-    $maf_line{Validation_Method}='NO' unless ($maf_line{Validation_Method});
+    $maf_line{Validation_Method}='None' unless ($maf_line{Validation_Method});
     my $so_effect = ( $maf_effect->{Effect} ? $maf_effect->{Effect} : $maf_effect->{Consequence} );
    # print "------". $so_effect.GetVariantClassification( $so_effect, $var_type)."----\n";
     $maf_line{Variant_Classification} = GetVariantClassification( $so_effect, $var_type);
