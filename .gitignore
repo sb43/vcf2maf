@@ -14,3 +14,12 @@ test_maf.out
 /project_data
 /test
 /logs
+pindel_somatic.cmd
+caveman_protected.cmd
+caveman_somatic.cmd
+sanger.ac.uk_MESO.IlluminaHiSeq_DNASeq.1.1.0.sdrf.txt
+sanger.ac.uk_MESO.IlluminaHiSeq_DNASeq_Cont.1.1.0.sdrf.txt
+sdrf.txt
+test_idf.txt
+test.cmd
+
